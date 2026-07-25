@@ -93,3 +93,4 @@ DrinkingNow/
 ## 发布说明
 
 源码仓库不提交 `build/`、`dist/`、`__pycache__/` 等生成文件。可执行文件 `DrinkingNow.exe` 通过 GitHub Release 附件发布。
+
