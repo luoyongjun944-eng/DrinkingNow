@@ -40,7 +40,6 @@ pyinstaller --onefile --windowed --icon=waterdrop.ico --name DrinkingNow main.py
 dist/DrinkingNow.exe
 ```
 
-把这个 EXE 发给朋友即可使用，对方不需要安装 Python。
 
 ## 使用方式
 
