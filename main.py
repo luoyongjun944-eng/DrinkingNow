@@ -45,11 +45,15 @@ DEFAULT_SETTINGS = {
     "autostart": False,
     "first_run": True,
     "theme": "blue",
+    "force_water": False,
+    "force_sedentary": False,
 }
 
-try:
+if getattr(sys, 'frozen', False):
+    _SCRIPT_DIR = Path(sys._MEIPASS)
+elif '__file__' in dir():
     _SCRIPT_DIR = Path(__file__).resolve().parent
-except (NameError, AttributeError):
+else:
     _SCRIPT_DIR = Path(sys.executable).parent
 ICO_PATH = str(_SCRIPT_DIR / "waterdrop.ico")
 
@@ -244,13 +248,14 @@ class WaterDropIcon:
 class ReminderPopup(tk.Toplevel):
     """从屏幕右下角滑入的毛玻璃提醒弹窗。"""
 
-    def __init__(self, master, reminder_type, message, on_dismiss, on_snooze, theme_color='#007AFF'):
+    def __init__(self, master, reminder_type, message, on_dismiss, on_snooze, theme_color='#007AFF', force=False):
         super().__init__(master)
         self.reminder_type = reminder_type
         self.message = message
         self._on_dismiss_cb = on_dismiss
         self._on_snooze_cb = on_snooze
         self._theme_color = theme_color
+        self._force = force
         self._slide_in_id = None
         self._stay_id = None
         self._slide_out_id = None
@@ -333,7 +338,8 @@ class ReminderPopup(tk.Toplevel):
         else:
             self._cur_y = target
             self.geometry(f"{self.win_w}x{self.win_h}+{self.target_x}+{self._cur_y}")
-            self._stay_id = self.after(8000, self._slide_out)
+            if not self._force:
+                self._stay_id = self.after(8000, self._slide_out)
 
     def _slide_out(self):
         screen_h = self.winfo_screenheight()
@@ -397,7 +403,7 @@ class SettingsPanel(tk.Toplevel):
         self.title(f"{APP_NAME} 设置")
         self.resizable(False, False)
 
-        w, h = 390, 440
+        w, h = 390, 530
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"{w}x{h}+{(sw - w)//2}+{(sh - h)//2}")
         self.configure(bg=self._theme_bg)
@@ -435,13 +441,21 @@ class SettingsPanel(tk.Toplevel):
         self._sv_sound = tk.BooleanVar(value=self._sm.get('sound_enabled', True))
         self._toggle_row(body, 2, LABEL_SOUND, self._sv_sound)
 
+        self._sv_force_w = tk.BooleanVar(value=self._sm.get('force_water', False))
+        self._toggle_row(body, 3, "🥤 喝水强制提醒", self._sv_force_w,
+                         hint="开启后喝水弹窗不会自动消失，需手动点击关闭")
+
+        self._sv_force_s = tk.BooleanVar(value=self._sm.get('force_sedentary', False))
+        self._toggle_row(body, 4, "🪑 久坐强制提醒", self._sv_force_s,
+                         hint="开启后久坐弹窗不会自动消失，需手动点击关闭")
+
         self._sv_auto = tk.BooleanVar(value=self._sm.get('autostart', False))
-        self._toggle_row(body, 3, LABEL_AUTOSTART, self._sv_auto)
+        self._toggle_row(body, 5, LABEL_AUTOSTART, self._sv_auto)
 
         # ── 主题颜色选择器 ──
         self._sv_theme = tk.StringVar(value=self._current_theme)
         self._theme_frm = tk.Frame(body, bg=bg)
-        self._theme_frm.grid(row=4, column=0, sticky='ew', pady=12)
+        self._theme_frm.grid(row=6, column=0, sticky='ew', pady=12)
         tk.Label(self._theme_frm, text='主题颜色', font=('Microsoft YaHei UI', 12),
                  fg='#1C1C1E', bg=bg).pack(side='left')
         self._theme_canvas = tk.Canvas(
@@ -466,23 +480,93 @@ class SettingsPanel(tk.Toplevel):
         vcmd = (self.register(lambda P: P == '' or P.isdigit()), '%P')
         e.config(validate='key', validatecommand=vcmd)
 
-    def _toggle_row(self, parent, row, label, bv):
+    def _toggle_row(self, parent, row, label, bv, hint=None):
         bg = self._theme_bg
         f = tk.Frame(parent, bg=bg)
         f.grid(row=row, column=0, sticky='ew', pady=10)
-        tk.Label(f, text=label, font=('Microsoft YaHei UI', 12),
+        lbl_frm = tk.Frame(f, bg=bg)
+        lbl_frm.pack(side='left')
+        tk.Label(lbl_frm, text=label, font=('Microsoft YaHei UI', 12),
                  fg='#1C1C1E', bg=bg).pack(side='left')
+        if hint:
+            info = tk.Label(lbl_frm, text=" ⓘ", font=('Microsoft YaHei UI', 10),
+                           fg='#8E8E93', bg=bg, cursor='hand2')
+            info.pack(side='left')
+            self._bind_tooltip(info, hint)
         tk.Checkbutton(f, variable=bv, bg=bg,
                        activebackground=bg).pack(side='right')
+
+    def _bind_tooltip(self, widget, text):
+        """鼠标悬停时显示圆润气泡提示，离开时消失。"""
+        tip = None
+
+        def show(_):
+            nonlocal tip
+            if tip is not None:
+                return
+            tip = tk.Toplevel(widget)
+            tip.wm_overrideredirect(True)
+            tip.attributes('-topmost', True)
+            try:
+                tip.attributes('-alpha', 0.95)
+            except tk.TclError:
+                pass
+
+            bg = '#8E8E93'  # 浅灰，白字可读
+            tw = 230
+            r = 14  # 圆角半径
+
+            # 量文字高度
+            tmp = tk.Label(tip, text=text, font=('Microsoft YaHei UI', 10),
+                           wraplength=tw - 28)
+            req_h = tmp.winfo_reqheight()
+            tmp.destroy()
+            th = req_h + 24
+
+            c = tk.Canvas(tip, width=tw, height=th,
+                          bg=self._theme_bg, highlightthickness=0)
+            c.pack()
+
+            # 圆角矩形
+            pts = [r, 0, tw - r - 1, 0, tw - 1, 0, tw - 1, r,
+                   tw - 1, th - r - 1, tw - 1, th - 1, tw - r - 1, th - 1,
+                   r, th - 1, 0, th - 1, 0, th - r - 1,
+                   0, r, 0, 0, r, 0]
+            c.create_polygon(pts, fill=bg, smooth=True, outline='')
+
+            # 白字
+            c.create_text(tw // 2, th // 2, text=text, anchor='center',
+                          font=('Microsoft YaHei UI', 10),
+                          fill='white', width=tw - 28)
+
+            # 定位
+            wx = widget.winfo_rootx()
+            wy = widget.winfo_rooty() + widget.winfo_height() + 6
+            screen_w = widget.winfo_screenwidth()
+            if wx + tw > screen_w - 12:
+                wx = screen_w - tw - 12
+            tip.geometry(f'{tw}x{th}+{wx}+{wy}')
+
+        def hide(_):
+            nonlocal tip
+            if tip is not None:
+                tip.destroy()
+                tip = None
+
+        widget.bind('<Enter>', show, add='+')
+        widget.bind('<Leave>', hide, add='+')
 
     def _pill_btn(self, parent, text, color, cb):
         c = tk.Canvas(parent, width=342, height=44, bg=self._theme_bg, highlightthickness=0)
         c.pack()
-        r = 22
-        pts = [r, 0, 342 - r, 0, 342, 0, 342, r, 342, 44 - r, 342, 44,
-               342 - r, 44, r, 44, 0, 44, 0, 44 - r, 0, r, 0, 0]
-        c.create_polygon(pts, fill=color, smooth=True, outline='')
-        c.create_text(171, 22, text=text, font=('Microsoft YaHei UI', 13, 'bold'),
+        w, h = 342, 44
+        r = h // 2  # 22
+        # 左半圆 + 中间矩形 + 右半圆（完美抗锯齿圆角）
+        c.create_oval(0, 0, 2 * r, h, fill=color, outline='')
+        c.create_oval(w - 2 * r, 0, w, h, fill=color, outline='')
+        c.create_rectangle(r, 0, w - r, h, fill=color, outline='')
+        c.create_text(w // 2, h // 2, text=text,
+                      font=('Microsoft YaHei UI', 13, 'bold'),
                       fill='white', anchor='center')
         c.bind('<Button-1>', lambda e: cb())
         c.bind('<Enter>', lambda e: c.config(cursor='hand2'))
@@ -530,6 +614,8 @@ class SettingsPanel(tk.Toplevel):
         saved_water = self._sv_water.get()
         saved_sit = self._sv_sit.get()
         saved_sound = self._sv_sound.get()
+        saved_force_w = self._sv_force_w.get()
+        saved_force_s = self._sv_force_s.get()
         saved_auto = self._sv_auto.get()
 
         # 重建所有子控件
@@ -541,22 +627,27 @@ class SettingsPanel(tk.Toplevel):
         self._sv_water.set(saved_water)
         self._sv_sit.set(saved_sit)
         self._sv_sound.set(saved_sound)
+        self._sv_force_w.set(saved_force_w)
+        self._sv_force_s.set(saved_force_s)
         self._sv_auto.set(saved_auto)
 
     def _save(self):
         try:
             wi = int(self._sv_water.get())
             si = int(self._sv_sit.get())
-            if wi < 1:
-                wi = 1
-            if si < 1:
-                si = 1
+            clamped = wi < 5 or si < 5
+            if wi < 5:
+                wi = 5
+            if si < 5:
+                si = 5
         except ValueError:
             return
 
         self._sm.set('water_interval', wi)
         self._sm.set('sedentary_interval', si)
         self._sm.set('sound_enabled', self._sv_sound.get())
+        self._sm.set('force_water', self._sv_force_w.get())
+        self._sm.set('force_sedentary', self._sv_force_s.get())
         self._sm.set('autostart', self._sv_auto.get())
         self._sm.set('theme', self._sv_theme.get())
         self._sm.set('first_run', False)
@@ -565,7 +656,40 @@ class SettingsPanel(tk.Toplevel):
 
         if self._on_save_cb:
             self._on_save_cb()
-        self._fade_out_and_close()
+
+        if clamped:
+            # 自动更新输入框数字为 5
+            if self._sv_water.get() != str(wi):
+                self._sv_water.set(str(wi))
+            if self._sv_sit.get() != str(si):
+                self._sv_sit.set(str(si))
+            self._show_min_hint()
+        # 保存后页面不自动关闭，由用户手动关
+
+    def _show_min_hint(self):
+        """显示间隔最低 5 分钟的提示，2 秒后淡出消失，页面不关。"""
+        w, h = 340, 42
+        c = tk.Canvas(self, width=w, height=h,
+                      bg=self._theme_bg, highlightthickness=0)
+        c.place(relx=0.5, rely=0.88, anchor='center')
+        self._hint_canvas = c
+
+        # 圆角背景
+        r = 21
+        pts = [r, 0, w - r, 0, w, 0, w, r, w, h - r, w, h,
+               w - r, h, r, h, 0, h, 0, h - r, 0, r, 0, 0]
+        c.create_polygon(pts, fill='#FFF9C4', smooth=True, outline='#FFD54F', width=1)
+        c.create_text(w // 2, h // 2, text="⏱ 间隔最少为 5 分钟，已自动调整",
+                      font=('Microsoft YaHei UI', 11),
+                      fill='#F57F17', anchor='center')
+
+        # 2 秒后淡出 hint，页面不动
+        self.after(2000, self._dismiss_hint)
+
+    def _dismiss_hint(self):
+        if hasattr(self, '_hint_canvas'):
+            self._hint_canvas.destroy()
+            del self._hint_canvas
 
     def _toggle_autostart(self, enable):
         startup = Path(os.environ.get('APPDATA', '')) / \
@@ -621,6 +745,23 @@ class SettingsPanel(tk.Toplevel):
 
 
 # ═══════════════════════════════════════════════════════════
+#  托盘图标（继承 pystray，覆盖左键行为）
+# ═══════════════════════════════════════════════════════════
+
+class TrayIcon(pystray.Icon):
+    """pystray.Icon 子类，左键点击时触发自定义回调。"""
+
+    def __init__(self, name, icon, title, menu, on_left_click=None):
+        super().__init__(name, icon=icon, title=title, menu=menu)
+        self._on_left_click = on_left_click
+
+    def __call__(self):
+        """pystray 在左键点击托盘图标时自动调用此方法。"""
+        if self._on_left_click:
+            self._on_left_click()
+
+
+# ═══════════════════════════════════════════════════════════
 #  主应用程序
 # ═══════════════════════════════════════════════════════════
 
@@ -659,21 +800,19 @@ class DrinkingNowApp:
         self._poll_events()
 
         if self.settings.get('first_run', True):
-            self._root.after(600, self.show_settings)
+            self._root.after(500, self.show_settings)
 
     # ── 托盘 ──────────────────────────────────────────────
 
     def _init_tray(self):
         img = WaterDropIcon.create('normal')
         menu = self._build_menu()
-        self._tray = pystray.Icon(APP_NAME, img, APP_NAME, menu)
+        self._tray = TrayIcon(APP_NAME, img, APP_NAME, menu,
+                              on_left_click=self._on_tray_left_click)
         threading.Thread(target=self._tray.run, daemon=True).start()
 
     def _build_menu(self):
-        items = [
-            pystray.MenuItem('打开设置', self._menu_settings),
-            pystray.Menu.SEPARATOR,
-        ]
+        items = []
 
         if self._paused:
             remaining = ''
@@ -753,6 +892,12 @@ class DrinkingNowApp:
         except Exception:
             pass
 
+    # ── 托盘左键 ──────────────────────────────────────────
+
+    def _on_tray_left_click(self):
+        """左键点击托盘图标 → 打开设置。"""
+        self._event_q.put(('show_settings',))
+
     # ── 计时器 ─────────────────────────────────────────────
 
     def _start_timers(self):
@@ -829,7 +974,14 @@ class DrinkingNowApp:
 
     def _show_reminder(self, rtype):
         if self._popup is not None:
-            return
+            # 新提醒替换旧弹窗
+            try:
+                self._popup.dismiss()
+            except Exception:
+                pass
+            self._popup = None
+            self._alerting = False
+            self._pending_reminder = None
 
         msg = random.choice(WATER_MESSAGES if rtype == 'water' else SEDENTARY_MESSAGES)
         self._play_sound()
@@ -840,15 +992,18 @@ class DrinkingNowApp:
         def on_dismiss():
             self._alerting = False
             self._update_icon()
+            self._flush_pending()
 
         def on_snooze():
             self._alerting = False
             self._update_icon()
             self._event_q.put(('snooze', rtype))
+            self._flush_pending()
 
         theme_key = self.settings.get('theme', DEFAULT_THEME)
         theme_accent, _ = get_theme_colors(theme_key)
-        self._popup = ReminderPopup(self._root, rtype, msg, on_dismiss, on_snooze, theme_color=theme_accent)
+        force = self.settings.get('force_water' if rtype == 'water' else 'force_sedentary', False)
+        self._popup = ReminderPopup(self._root, rtype, msg, on_dismiss, on_snooze, theme_color=theme_accent, force=force)
         self._watch_popup()
 
     def _watch_popup(self):
@@ -860,6 +1015,19 @@ class DrinkingNowApp:
                     self._root.after(200, self._watch_popup)
             except Exception:
                 self._popup = None
+
+    def _flush_pending(self):
+        """弹窗关闭后，5 秒后弹出排队的提醒。"""
+        if self._pending_reminder:
+            pending = self._pending_reminder
+            self._pending_reminder = None
+
+            def delayed():
+                time.sleep(5)
+                if self._running:
+                    self._event_q.put((pending,))
+
+            threading.Thread(target=delayed, daemon=True).start()
 
     def _handle_snooze(self, rtype):
         def delayed():
